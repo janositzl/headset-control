@@ -18,7 +18,20 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Icon _iconWarn = IconFactory.Create(Color.DarkOrange);
     private readonly ToolStripMenuItem _deviceMenu = new("Device");
     private readonly ToolStripMenuItem _autostartItem = new("Start with Windows");
-    private bool _busy;
+    private readonly ToolStripMenuItem _connectItem = new("Connect");
+    private readonly ToolStripMenuItem _disconnectItem = new("Disconnect");
+    private bool _isBusy;
+
+    /// <summary>True while a connect/disconnect is running; the menu items that could start another are greyed out.</summary>
+    private bool Busy
+    {
+        get => _isBusy;
+        set
+        {
+            _isBusy = value;
+            _connectItem.Enabled = _disconnectItem.Enabled = _deviceMenu.Enabled = !value;
+        }
+    }
 
     public TrayContext()
     {
@@ -26,8 +39,10 @@ internal sealed class TrayContext : ApplicationContext
         _locator = new DeviceLocator(_api);
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Connect", null, async (_, _) => await SetAsync(true));
-        menu.Items.Add("Disconnect", null, async (_, _) => await SetAsync(false));
+        _connectItem.Click += async (_, _) => await SetAsync(true);
+        _disconnectItem.Click += async (_, _) => await SetAsync(false);
+        menu.Items.Add(_connectItem);
+        menu.Items.Add(_disconnectItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_deviceMenu);
         _autostartItem.Click += (_, _) => SafeRun(() => Autostart.Set(!Autostart.IsEnabled));
@@ -78,8 +93,8 @@ internal sealed class TrayContext : ApplicationContext
     /// <summary>Runs one user-requested action; ignores requests while another is in flight.</summary>
     private async Task PerformAsync(Func<BtDevice, Task<bool>> action)
     {
-        if (_busy) return;
-        _busy = true;
+        if (Busy) return;
+        Busy = true;
         SetText("Working...");
         try
         {
@@ -92,13 +107,13 @@ internal sealed class TrayContext : ApplicationContext
             Show(TrayState.Warning, null, e.Message);
             Notify(e.Message);
         }
-        finally { _busy = false; }
+        finally { Busy = false; }
     }
 
     /// <summary>Background poll: updates icon only, never raises balloons.</summary>
     private async Task RefreshAsync()
     {
-        if (_busy) return;
+        if (Busy) return;
         try
         {
             var (device, connected) = await Task.Run(() =>
@@ -106,12 +121,12 @@ internal sealed class TrayContext : ApplicationContext
                 var d = ResolveSelected();
                 return (d, _controller.IsConnected(d.Address));
             });
-            if (_busy) return;
+            if (Busy) return;
             Show(connected ? TrayState.Connected : TrayState.Disconnected, device);
         }
         catch (Exception e)
         {
-            if (!_busy) Show(TrayState.Warning, null, e.Message);
+            if (!Busy) Show(TrayState.Warning, null, e.Message);
         }
     }
 
