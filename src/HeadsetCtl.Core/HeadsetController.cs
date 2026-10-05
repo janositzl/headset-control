@@ -9,6 +9,13 @@ public sealed class HeadsetController
     public static readonly Guid Headset = Guid.Parse("00001108-0000-1000-8000-00805F9B34FB");
     public static readonly Guid[] AudioServices = { A2dpSink, Handsfree, Headset };
 
+    // Fallback for devices that have none of the audio services above (link carried by AVRCP).
+    public static readonly Guid[] AvrcpServices =
+    {
+        Guid.Parse("0000110E-0000-1000-8000-00805F9B34FB"),   // AVRCP controller
+        Guid.Parse("0000110C-0000-1000-8000-00805F9B34FB"),   // AVRCP target
+    };
+
     private readonly IBluetoothApi _api;
     private readonly TimeSpan _settleTimeout;
     private readonly TimeSpan _pollInterval;
@@ -32,21 +39,28 @@ public sealed class HeadsetController
         var audio = await Task.Run(() => Apply(address, AudioServices, connect), ct);
         firstError = audio.FirstError;
 
-        // Devices without A2DP/Handsfree/Headset (e.g. AVRCP-only earphones) answer "not found" to all of
-        // those; skip the wait and go straight to the services Windows has installed for the device.
-        var state = audio.AnySucceeded && await WaitForStateAsync(address, connect, ct);
-        if (!state)
+        if (audio.AnySucceeded)
         {
+            // The audio services accepted the request: that is the whole job. Never touch other services
+            // here, even if the state is slow to change - disabling a device's other services breaks it in Windows.
+            await WaitForStateAsync(address, connect, ct);
+        }
+        else
+        {
+            // No audio service exists on this device (e.g. AVRCP-only earphones answer "not found" to all of
+            // them). Its link is carried by AVRCP, so use only that, and only if Windows installed it.
+            var installed = _api.GetInstalledServices(address);
             var extra = await Task.Run(() =>
-                Apply(address, _api.GetInstalledServices(address).Where(s => !AudioServices.Contains(s)).ToList(), connect), ct);
+                Apply(address, AvrcpServices.Where(installed.Contains).ToList(), connect), ct);
             if (firstError == 0) firstError = extra.FirstError;
-
-            if (!await WaitForStateAsync(address, connect, ct) && firstError != 0)
-                throw new BluetoothException(
-                    $"Could not {(connect ? "connect" : "disconnect")} {MacAddress.Format(address)} (Windows error {firstError}).");
+            await WaitForStateAsync(address, connect, ct);
         }
 
-        return IsConnected(address);
+        var state = IsConnected(address);
+        if (state != connect && firstError != 0)
+            throw new BluetoothException(
+                $"Could not {(connect ? "connect" : "disconnect")} {MacAddress.Format(address)} (Windows error {firstError}).");
+        return state;
     }
 
     private (uint FirstError, bool AnySucceeded) Apply(ulong address, IReadOnlyList<Guid> services, bool connect)

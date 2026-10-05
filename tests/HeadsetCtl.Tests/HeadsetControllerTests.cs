@@ -112,13 +112,25 @@ public class HeadsetControllerTests
     }
 
     [Fact]
-    public async Task WhenAudioServicesDoNotChangeState_FallsBackToInstalledServices()
+    public async Task WhenAudioServicesAccepted_NeverTouchesOtherServices_EvenIfStateDoesNotChange()
     {
+        // A device with working audio services (the Sony) must only ever see the audio path.
         var (ctl, api) = Make(connected: true);
-        api.InstalledServices.Add(Spp);
-        api.ApplyStateChange = false;   // audio calls return 0 but the link stays up
+        api.InstalledServices.AddRange(new[] { Spp, AvrcpController });
+        api.ApplyStateChange = false;   // audio calls return 0 but the link has not (yet) dropped
         await ctl.SetConnectedAsync(Addr, false);
-        Assert.Contains(api.Calls, c => c.Service == Spp && !c.Enable);
+        Assert.All(api.Calls, c => Assert.Contains(c.Service, HeadsetController.AudioServices));
+    }
+
+    [Fact]
+    public async Task Fallback_OnlyUsesAvrcp_NotSerialPortOrCustomServices()
+    {
+        var (ctl, api) = MakeAvrcpOnly(connected: true);
+        api.InstalledServices.Add(Guid.NewGuid());   // a vendor-specific service
+        await ctl.SetConnectedAsync(Addr, false);
+        Assert.DoesNotContain(api.Calls, c => c.Service == Spp);
+        Assert.All(api.Calls, c => Assert.True(
+            HeadsetController.AudioServices.Contains(c.Service) || HeadsetController.AvrcpServices.Contains(c.Service)));
     }
 
     [Fact]
@@ -126,7 +138,7 @@ public class HeadsetControllerTests
     {
         var (ctl, api) = Make(connected: true);
         api.SupportedServices = new HashSet<Guid>();     // everything returns 1168
-        api.InstalledServices.Add(Spp);
+        api.InstalledServices.Add(AvrcpController);
         var ex = await Assert.ThrowsAsync<BluetoothException>(() => ctl.SetConnectedAsync(Addr, false));
         Assert.Contains("1168", ex.Message);
     }
