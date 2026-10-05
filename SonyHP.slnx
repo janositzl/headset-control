@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HeadsetCtl.Cli/HeadsetCtl.Cli.csproj" />
+    <Project Path="src/HeadsetCtl.Core/HeadsetCtl.Core.csproj" />
+    <Project Path="src/HeadsetCtl.Tray/HeadsetCtl.Tray.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HeadsetCtl.Tests/HeadsetCtl.Tests.csproj" />
+  </Folder>
+</Solution>
