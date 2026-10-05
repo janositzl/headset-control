@@ -18,12 +18,21 @@ public sealed class FakeBluetoothApi : IBluetoothApi
     public List<(ulong Address, Guid Service, bool Enable)> Calls { get; } = new();
     public bool ApplyStateChange { get; set; } = true;
 
+    /// <summary>When set, any service outside this set returns 1168 (not found), like a device that lacks it.</summary>
+    public HashSet<Guid>? SupportedServices { get; set; }
+
+    /// <summary>Services reported by GetInstalledServices.</summary>
+    public List<Guid> InstalledServices { get; } = new();
+
     public BtDevice? GetDevice(ulong address) => Devices.FirstOrDefault(d => d.Address == address);
+
+    public IReadOnlyList<Guid> GetInstalledServices(ulong address) => InstalledServices.ToList();
 
     public uint SetServiceState(ulong address, Guid service, bool enable)
     {
         Calls.Add((address, service, enable));
-        var code = ServiceResults.TryGetValue(service, out var c) ? c : 0u;
+        var code = SupportedServices is not null && !SupportedServices.Contains(service) ? 1168u
+            : ServiceResults.TryGetValue(service, out var c) ? c : 0u;
         if (code == 0 && ApplyStateChange)
         {
             var i = Devices.FindIndex(d => d.Address == address);

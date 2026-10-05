@@ -26,30 +26,49 @@ public sealed class HeadsetController
 
     public async Task<bool> SetConnectedAsync(ulong address, bool connect, CancellationToken ct = default)
     {
-        // The service calls block for a second or two, so keep them off the caller's (UI) thread.
-        uint firstError = await Task.Run(() =>
-        {
-            uint error = 0;
-            foreach (var service in AudioServices)
-            {
-                var r = _api.SetServiceState(address, service, connect);
-                if (r != 0 && r != ErrorInvalidParameter && error == 0) error = r;
-            }
-            return error;
-        }, ct);
+        uint firstError = 0;
 
+        // The service calls block for a second or two, so keep them off the caller's (UI) thread.
+        var audio = await Task.Run(() => Apply(address, AudioServices, connect), ct);
+        firstError = audio.FirstError;
+
+        // Devices without A2DP/Handsfree/Headset (e.g. AVRCP-only earphones) answer "not found" to all of
+        // those; skip the wait and go straight to the services Windows has installed for the device.
+        var state = audio.AnySucceeded && await WaitForStateAsync(address, connect, ct);
+        if (!state)
+        {
+            var extra = await Task.Run(() =>
+                Apply(address, _api.GetInstalledServices(address).Where(s => !AudioServices.Contains(s)).ToList(), connect), ct);
+            if (firstError == 0) firstError = extra.FirstError;
+
+            if (!await WaitForStateAsync(address, connect, ct) && firstError != 0)
+                throw new BluetoothException(
+                    $"Could not {(connect ? "connect" : "disconnect")} {MacAddress.Format(address)} (Windows error {firstError}).");
+        }
+
+        return IsConnected(address);
+    }
+
+    private (uint FirstError, bool AnySucceeded) Apply(ulong address, IReadOnlyList<Guid> services, bool connect)
+    {
+        uint error = 0;
+        bool any = false;
+        foreach (var service in services)
+        {
+            var r = _api.SetServiceState(address, service, connect);
+            if (r == 0) any = true;
+            else if (r != ErrorInvalidParameter && error == 0) error = r;
+        }
+        return (error, any);
+    }
+
+    private async Task<bool> WaitForStateAsync(ulong address, bool target, CancellationToken ct)
+    {
         var deadline = DateTime.UtcNow + _settleTimeout;
         while (true)
         {
-            var state = IsConnected(address);
-            if (state == connect) return state;
-            if (DateTime.UtcNow >= deadline)
-            {
-                if (firstError != 0)
-                    throw new BluetoothException(
-                        $"Could not {(connect ? "connect" : "disconnect")} {MacAddress.Format(address)} (Windows error {firstError}).");
-                return state;
-            }
+            if (IsConnected(address) == target) return true;
+            if (DateTime.UtcNow >= deadline) return false;
             await Task.Delay(_pollInterval, ct);
         }
     }

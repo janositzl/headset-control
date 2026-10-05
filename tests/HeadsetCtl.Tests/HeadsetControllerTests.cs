@@ -74,6 +74,63 @@ public class HeadsetControllerTests
         Assert.False(await ctl.SetConnectedAsync(Addr, true));
     }
 
+    private static readonly Guid AvrcpController = Guid.Parse("0000110E-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid Spp = Guid.Parse("00001101-0000-1000-8000-00805F9B34FB");
+
+    private static (HeadsetController ctl, FakeBluetoothApi api) MakeAvrcpOnly(bool connected)
+    {
+        // Like the Baseus Bowie MA10: no A2DP/Handsfree/Headset services, link carried by AVRCP.
+        var (ctl, api) = Make(connected);
+        api.SupportedServices = new HashSet<Guid> { AvrcpController };
+        api.InstalledServices.AddRange(new[] { Spp, AvrcpController });
+        return (ctl, api);
+    }
+
+    [Fact]
+    public async Task Disconnect_WhenAudioServicesNotFound_FallsBackToInstalledServices()
+    {
+        var (ctl, api) = MakeAvrcpOnly(connected: true);
+        Assert.False(await ctl.SetConnectedAsync(Addr, false));
+        Assert.Contains(api.Calls, c => c.Service == AvrcpController && !c.Enable);
+    }
+
+    [Fact]
+    public async Task Connect_WhenAudioServicesNotFound_FallsBackToInstalledServices()
+    {
+        var (ctl, api) = MakeAvrcpOnly(connected: false);
+        Assert.True(await ctl.SetConnectedAsync(Addr, true));
+        Assert.Contains(api.Calls, c => c.Service == AvrcpController && c.Enable);
+    }
+
+    [Fact]
+    public async Task WhenAudioServicesWork_InstalledServicesAreLeftAlone()
+    {
+        var (ctl, api) = Make(connected: true);
+        api.InstalledServices.Add(Spp);
+        Assert.False(await ctl.SetConnectedAsync(Addr, false));
+        Assert.DoesNotContain(api.Calls, c => c.Service == Spp);
+    }
+
+    [Fact]
+    public async Task WhenAudioServicesDoNotChangeState_FallsBackToInstalledServices()
+    {
+        var (ctl, api) = Make(connected: true);
+        api.InstalledServices.Add(Spp);
+        api.ApplyStateChange = false;   // audio calls return 0 but the link stays up
+        await ctl.SetConnectedAsync(Addr, false);
+        Assert.Contains(api.Calls, c => c.Service == Spp && !c.Enable);
+    }
+
+    [Fact]
+    public async Task Fallback_AlsoFailing_ThrowsWithErrorCode()
+    {
+        var (ctl, api) = Make(connected: true);
+        api.SupportedServices = new HashSet<Guid>();     // everything returns 1168
+        api.InstalledServices.Add(Spp);
+        var ex = await Assert.ThrowsAsync<BluetoothException>(() => ctl.SetConnectedAsync(Addr, false));
+        Assert.Contains("1168", ex.Message);
+    }
+
     [Fact]
     public async Task Toggle_WhenConnected_Disconnects()
     {

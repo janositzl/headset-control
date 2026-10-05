@@ -57,6 +57,20 @@ public sealed class NativeBt : IBluetoothApi
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool BluetoothFindDeviceClose(IntPtr find);
 
+    [DllImport("bthprops.cpl")]
+    private static extern uint BluetoothEnumerateInstalledServices(
+        IntPtr hRadio, ref BLUETOOTH_DEVICE_INFO info, ref uint count, [Out] Guid[] services);
+
+    public IReadOnlyList<Guid> GetInstalledServices(ulong address)
+    {
+        var info = NewInfo(address);
+        if (BluetoothGetDeviceInfo(IntPtr.Zero, ref info) != 0) return [];
+        var buffer = new Guid[64];
+        uint count = (uint)buffer.Length;
+        if (BluetoothEnumerateInstalledServices(IntPtr.Zero, ref info, ref count, buffer) != 0) return [];
+        return buffer.Take((int)Math.Min(count, (uint)buffer.Length)).ToList();
+    }
+
     private static BLUETOOTH_DEVICE_INFO NewInfo(ulong address = 0) => new()
     {
         dwSize = Marshal.SizeOf<BLUETOOTH_DEVICE_INFO>(),
