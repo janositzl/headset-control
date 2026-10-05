@@ -167,6 +167,53 @@ public class CliAppTests : IDisposable
     }
 
     [Fact]
+    public async Task Mode_WithoutValue_ShowsAudioByDefault()
+    {
+        Pair(Headset);
+        Assert.Equal(CliApp.Ok, await Run("mode", "WH-CH720N"));
+        Assert.Contains("mode audio", _out.ToString());
+    }
+
+    [Fact]
+    public async Task Mode_Set_IsSavedAndShown()
+    {
+        Pair(Other);
+        Assert.Equal(CliApp.Ok, await Run("mode", "Other-BT", "AVRCP"));
+        Assert.Contains("mode avrcp", _out.ToString());
+        Assert.Equal(ConnectionMode.Avrcp, Store.Load().GetMode("AA:BB:CC:11:22:33"));
+    }
+
+    [Theory]
+    [InlineData("mode")]
+    [InlineData("mode", "Other-BT", "bogus")]
+    [InlineData("mode", "Other-BT", "avrcp", "extra")]
+    public async Task Mode_BadArguments_AreUsageErrors(params string[] args)
+    {
+        Pair(Other);
+        Assert.Equal(CliApp.Failure, await Run(args));
+        Assert.Contains("Usage", _err.ToString());
+    }
+
+    [Fact]
+    public async Task Mode_UnknownDevice_ReturnsNotFound()
+    {
+        Assert.Equal(CliApp.NotFound, await Run("mode", "Nope", "avrcp"));
+    }
+
+    [Fact]
+    public async Task Off_UsesTheDevicesSavedMode()
+    {
+        var baseus = Fake.Audio("Baseus", 0x41AA00DBD8D1, connected: true);
+        Pair(baseus);
+        _api.SupportedServices = new HashSet<Guid> { HeadsetController.AvrcpServices[0] };
+        await Run("mode", "Baseus", "avrcp");
+        Assert.Equal(CliApp.Ok, await Run("off"
+            , "--device", "Baseus"));
+        Assert.False(_api.Devices[0].Connected);
+        Assert.All(_api.Calls, c => Assert.Contains(c.Service, HeadsetController.AvrcpServices));
+    }
+
+    [Fact]
     public async Task NoArguments_PrintsUsage()
     {
         Assert.Equal(CliApp.Failure, await Run());

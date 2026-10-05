@@ -60,6 +60,45 @@ public class SettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void GetMode_DefaultsToAudio() =>
+        Assert.Equal(ConnectionMode.Audio, new Settings().GetMode("00:A4:1C:06:64:0C"));
+
+    [Fact]
+    public void SetMode_RoundTripsThroughFile_AndIsCaseInsensitiveOnMac()
+    {
+        var store = new SettingsStore(FilePath);
+        var s = new Settings();
+        s.SetMode("41:AA:00:DB:D8:D1", ConnectionMode.Avrcp);
+        store.Save(s);
+
+        var loaded = store.Load();
+        Assert.Equal(ConnectionMode.Avrcp, loaded.GetMode("41:AA:00:DB:D8:D1"));
+        Assert.Equal(ConnectionMode.Avrcp, loaded.GetMode("41:aa:00:db:d8:d1"));
+        Assert.Equal(ConnectionMode.Audio, loaded.GetMode("00:A4:1C:06:64:0C"));
+    }
+
+    [Fact]
+    public void SetMode_ReplacesExistingEntry()
+    {
+        var s = new Settings();
+        s.SetMode("41:AA:00:DB:D8:D1", ConnectionMode.Avrcp);
+        s.SetMode("41:aa:00:db:d8:d1", ConnectionMode.Audio);
+        Assert.Single(s.DeviceModes);
+        Assert.Equal(ConnectionMode.Audio, s.GetMode("41:AA:00:DB:D8:D1"));
+    }
+
+    [Theory]
+    [InlineData("{ \"DeviceModes\": null }")]
+    [InlineData("{ \"DeviceModes\": { \"41:AA:00:DB:D8:D1\": \"nonsense\" } }")]
+    [InlineData("{ \"DeviceModes\": { \"41:AA:00:DB:D8:D1\": null } }")]
+    public void Load_BadDeviceModes_FallBackToAudio(string content)
+    {
+        WriteRaw(content);
+        var s = new SettingsStore(FilePath).Load();
+        Assert.Equal(ConnectionMode.Audio, s.GetMode("41:AA:00:DB:D8:D1"));
+    }
+
+    [Fact]
     public void DefaultPath_IsUnderAppData() =>
         Assert.EndsWith(Path.Combine("HeadsetCtl", "settings.json"), SettingsStore.DefaultPath);
 }

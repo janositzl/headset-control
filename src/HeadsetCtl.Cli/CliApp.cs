@@ -11,6 +11,7 @@ public sealed class CliApp(
         "Usage:\n" +
         "  headset list [--all]\n" +
         "  headset select <name-or-mac>\n" +
+        "  headset mode <name-or-mac> [audio|avrcp]   (avrcp: for earphones that do not drop the link with audio mode)\n" +
         "  headset status|on|off|toggle [--device <name-or-mac>]";
 
     private sealed class UsageException : Exception;
@@ -29,6 +30,7 @@ public sealed class CliApp(
             {
                 "list" => List(rest),
                 "select" => Select(rest),
+                "mode" => Mode(rest),
                 "status" or "on" or "off" or "toggle" => await ControlAsync(command, rest),
                 _ => throw new UsageException(),
             };
@@ -92,6 +94,24 @@ public sealed class CliApp(
         return Ok;
     }
 
+    private int Mode(List<string> args)
+    {
+        if (args.Count is < 1 or > 2) throw new UsageException();
+        var device = _locator.Resolve(args[0]);
+        var settings = store.Load();
+
+        if (args.Count == 2)
+        {
+            if (!Enum.TryParse<ConnectionMode>(args[1], ignoreCase: true, out var mode) || !Enum.IsDefined(mode))
+                throw new UsageException();
+            settings.SetMode(device.Mac, mode);
+            store.Save(settings);
+        }
+
+        output.WriteLine($"{DisplayName(device)} ({device.Mac}): mode {settings.GetMode(device.Mac).ToString().ToLowerInvariant()}");
+        return Ok;
+    }
+
     private async Task<int> ControlAsync(string command, List<string> args)
     {
         var overrideDevice = TakeValue(args, "--device");
@@ -108,10 +128,11 @@ public sealed class CliApp(
             return Ok;
         }
 
+        var mode = store.Load().GetMode(device.Mac);
         bool? wanted = command switch { "on" => true, "off" => false, _ => null };
         var state = wanted is { } w
-            ? await controller.SetConnectedAsync(device.Address, w)
-            : await controller.ToggleAsync(device.Address);
+            ? await controller.SetConnectedAsync(device.Address, w, mode)
+            : await controller.ToggleAsync(device.Address, mode);
 
         if (wanted is { } target && state != target)
         {

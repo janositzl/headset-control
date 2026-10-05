@@ -5,6 +5,8 @@ namespace HeadsetCtl.Tests;
 public class HeadsetControllerTests
 {
     private const ulong Addr = 0x00A41C06640C;
+    private static readonly Guid AvrcpController = Guid.Parse("0000110E-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid Spp = Guid.Parse("00001101-0000-1000-8000-00805F9B34FB");
 
     private static (HeadsetController ctl, FakeBluetoothApi api) Make(bool connected = false)
     {
@@ -74,72 +76,48 @@ public class HeadsetControllerTests
         Assert.False(await ctl.SetConnectedAsync(Addr, true));
     }
 
-    private static readonly Guid AvrcpController = Guid.Parse("0000110E-0000-1000-8000-00805F9B34FB");
-    private static readonly Guid Spp = Guid.Parse("00001101-0000-1000-8000-00805F9B34FB");
-
-    private static (HeadsetController ctl, FakeBluetoothApi api) MakeAvrcpOnly(bool connected)
-    {
-        // Like the Baseus Bowie MA10: no A2DP/Handsfree/Headset services, link carried by AVRCP.
-        var (ctl, api) = Make(connected);
-        api.SupportedServices = new HashSet<Guid> { AvrcpController };
-        api.InstalledServices.AddRange(new[] { Spp, AvrcpController });
-        return (ctl, api);
-    }
-
     [Fact]
-    public async Task Disconnect_WhenAudioServicesNotFound_FallsBackToInstalledServices()
-    {
-        var (ctl, api) = MakeAvrcpOnly(connected: true);
-        Assert.False(await ctl.SetConnectedAsync(Addr, false));
-        Assert.Contains(api.Calls, c => c.Service == AvrcpController && !c.Enable);
-    }
-
-    [Fact]
-    public async Task Connect_WhenAudioServicesNotFound_FallsBackToInstalledServices()
-    {
-        var (ctl, api) = MakeAvrcpOnly(connected: false);
-        Assert.True(await ctl.SetConnectedAsync(Addr, true));
-        Assert.Contains(api.Calls, c => c.Service == AvrcpController && c.Enable);
-    }
-
-    [Fact]
-    public async Task WhenAudioServicesWork_InstalledServicesAreLeftAlone()
+    public async Task AudioMode_NeverTouchesAvrcpOrOtherServices()
     {
         var (ctl, api) = Make(connected: true);
-        api.InstalledServices.Add(Spp);
-        Assert.False(await ctl.SetConnectedAsync(Addr, false));
-        Assert.DoesNotContain(api.Calls, c => c.Service == Spp);
-    }
-
-    [Fact]
-    public async Task WhenAudioServicesAccepted_NeverTouchesOtherServices_EvenIfStateDoesNotChange()
-    {
-        // A device with working audio services (the Sony) must only ever see the audio path.
-        var (ctl, api) = Make(connected: true);
-        api.InstalledServices.AddRange(new[] { Spp, AvrcpController });
-        api.ApplyStateChange = false;   // audio calls return 0 but the link has not (yet) dropped
-        await ctl.SetConnectedAsync(Addr, false);
+        api.ApplyStateChange = false;   // even when the link does not drop, nothing else is touched
+        await ctl.SetConnectedAsync(Addr, false, ConnectionMode.Audio);
         Assert.All(api.Calls, c => Assert.Contains(c.Service, HeadsetController.AudioServices));
     }
 
     [Fact]
-    public async Task Fallback_OnlyUsesAvrcp_NotSerialPortOrCustomServices()
+    public async Task AvrcpMode_Disconnect_OnlyDisablesAvrcp_NeverAudio()
     {
-        var (ctl, api) = MakeAvrcpOnly(connected: true);
-        api.InstalledServices.Add(Guid.NewGuid());   // a vendor-specific service
-        await ctl.SetConnectedAsync(Addr, false);
+        // Like the Baseus Bowie MA10: disabling A2DP/Handsfree would kill the sound without dropping the link.
+        var (ctl, api) = Make(connected: true);
+        api.SupportedServices = new HashSet<Guid> { AvrcpController };
+        Assert.False(await ctl.SetConnectedAsync(Addr, false, ConnectionMode.Avrcp));
+        Assert.NotEmpty(api.Calls);
+        Assert.All(api.Calls, c =>
+        {
+            Assert.Contains(c.Service, HeadsetController.AvrcpServices);
+            Assert.False(c.Enable);
+        });
         Assert.DoesNotContain(api.Calls, c => c.Service == Spp);
-        Assert.All(api.Calls, c => Assert.True(
-            HeadsetController.AudioServices.Contains(c.Service) || HeadsetController.AvrcpServices.Contains(c.Service)));
     }
 
     [Fact]
-    public async Task Fallback_AlsoFailing_ThrowsWithErrorCode()
+    public async Task AvrcpMode_Connect_EnablesAudioAndAvrcp()
+    {
+        var (ctl, api) = Make(connected: false);
+        api.SupportedServices = new HashSet<Guid> { AvrcpController };
+        Assert.True(await ctl.SetConnectedAsync(Addr, true, ConnectionMode.Avrcp));
+        Assert.All(api.Calls, c => Assert.True(c.Enable));
+        Assert.Contains(api.Calls, c => c.Service == AvrcpController);
+        Assert.Contains(api.Calls, c => c.Service == HeadsetController.A2dpSink);
+    }
+
+    [Fact]
+    public async Task AvrcpMode_WhenNothingWorks_ThrowsWithErrorCode()
     {
         var (ctl, api) = Make(connected: true);
         api.SupportedServices = new HashSet<Guid>();     // everything returns 1168
-        api.InstalledServices.Add(AvrcpController);
-        var ex = await Assert.ThrowsAsync<BluetoothException>(() => ctl.SetConnectedAsync(Addr, false));
+        var ex = await Assert.ThrowsAsync<BluetoothException>(() => ctl.SetConnectedAsync(Addr, false, ConnectionMode.Avrcp));
         Assert.Contains("1168", ex.Message);
     }
 
@@ -155,6 +133,14 @@ public class HeadsetControllerTests
     {
         var (ctl, _) = Make(connected: false);
         Assert.True(await ctl.ToggleAsync(Addr));
+    }
+
+    [Fact]
+    public async Task Toggle_PassesModeThrough()
+    {
+        var (ctl, api) = Make(connected: true);
+        await ctl.ToggleAsync(Addr, ConnectionMode.Avrcp);
+        Assert.All(api.Calls, c => Assert.Contains(c.Service, HeadsetController.AvrcpServices));
     }
 
     [Fact]

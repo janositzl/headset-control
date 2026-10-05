@@ -67,12 +67,16 @@ internal sealed class TrayContext : ApplicationContext
             Notify($"Hotkey {text} is already in use by another program.");
     }
 
-    private Task ToggleAsync() => PerformAsync(address => _controller.ToggleAsync(address));
+    private ConnectionMode ModeFor(BtDevice device) => _store.Load().GetMode(device.Mac);
 
-    private Task SetAsync(bool connect) => PerformAsync(address => _controller.SetConnectedAsync(address, connect));
+    private Task ToggleAsync() =>
+        PerformAsync(device => _controller.ToggleAsync(device.Address, ModeFor(device)));
+
+    private Task SetAsync(bool connect) =>
+        PerformAsync(device => _controller.SetConnectedAsync(device.Address, connect, ModeFor(device)));
 
     /// <summary>Runs one user-requested action; ignores requests while another is in flight.</summary>
-    private async Task PerformAsync(Func<ulong, Task<bool>> action)
+    private async Task PerformAsync(Func<BtDevice, Task<bool>> action)
     {
         if (_busy) return;
         _busy = true;
@@ -80,7 +84,7 @@ internal sealed class TrayContext : ApplicationContext
         try
         {
             var device = await Task.Run(ResolveSelected);
-            var connected = await action(device.Address);
+            var connected = await action(device);
             Show(connected ? TrayState.Connected : TrayState.Disconnected, device);
         }
         catch (Exception e)

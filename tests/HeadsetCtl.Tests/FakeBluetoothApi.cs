@@ -21,12 +21,7 @@ public sealed class FakeBluetoothApi : IBluetoothApi
     /// <summary>When set, any service outside this set returns 1168 (not found), like a device that lacks it.</summary>
     public HashSet<Guid>? SupportedServices { get; set; }
 
-    /// <summary>Services reported by GetInstalledServices.</summary>
-    public List<Guid> InstalledServices { get; } = new();
-
     public BtDevice? GetDevice(ulong address) => Devices.FirstOrDefault(d => d.Address == address);
-
-    public IReadOnlyList<Guid> GetInstalledServices(ulong address) => InstalledServices.ToList();
 
     public uint SetServiceState(ulong address, Guid service, bool enable)
     {
